@@ -6,6 +6,7 @@ import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.media.MediaPlayer;
+import android.media.PlaybackParams;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -63,6 +64,9 @@ public class MainActivity extends Activity {
     private EditText targetInput;
     private EditText prefixInput;
     private LinearLayout segmentsContainer;
+    private SeekBar pitchBar;
+    private TextView pitchValueText;
+    private float pitchSemitones = 0f;
 
     private boolean userSeeking = false;
 
@@ -185,6 +189,65 @@ public class MainActivity extends Activity {
             }
         });
 
+        LinearLayout pitchCard = card();
+        LinearLayout.LayoutParams pitchCardParams = cardParams();
+        pitchCardParams.topMargin = dp(14);
+        root.addView(pitchCard, pitchCardParams);
+
+        LinearLayout pitchHeader = horizontal();
+        pitchCard.addView(pitchHeader, matchWrap());
+
+        TextView pitchTitle = text("Pitch", 18, TEXT, true);
+        pitchValueText = text("0.0 st", 16, ORANGE, true);
+        pitchValueText.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        pitchHeader.addView(pitchTitle, new LinearLayout.LayoutParams(0, dp(42), 1f));
+        pitchHeader.addView(pitchValueText, new LinearLayout.LayoutParams(0, dp(42), 1f));
+
+        TextView pitchHint = text("Atur karakter suara tanpa mengubah kecepatan. Rentang -12 sampai +12 semitone.", 12, MUTED, false);
+        pitchHint.setPadding(0, 0, 0, dp(6));
+        pitchCard.addView(pitchHint);
+
+        pitchBar = new SeekBar(this);
+        pitchBar.setMax(48);
+        pitchBar.setProgress(24);
+        pitchBar.setProgressTintList(ColorStateList.valueOf(ACCENT));
+        pitchBar.setThumbTintList(ColorStateList.valueOf(ACCENT));
+        pitchCard.addView(pitchBar, matchWrap());
+
+        LinearLayout pitchActions = horizontal();
+        pitchCard.addView(pitchActions, matchWrap());
+        Button pitchDown = secondaryButton("-0.5");
+        Button pitchReset = primaryButton("RESET PITCH");
+        Button pitchUp = secondaryButton("+0.5");
+        pitchActions.addView(pitchDown, weightedButton());
+        pitchActions.addView(pitchReset, weightedButton());
+        pitchActions.addView(pitchUp, weightedButton());
+
+        pitchBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                pitchSemitones = (progress - 24) / 2f;
+                updatePitchLabel();
+                if (fromUser) applyPitchLiveIfPlaying();
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
+
+        pitchDown.setOnClickListener(v -> {
+            pitchBar.setProgress(Math.max(0, pitchBar.getProgress() - 1));
+            applyPitchLiveIfPlaying();
+        });
+        pitchUp.setOnClickListener(v -> {
+            pitchBar.setProgress(Math.min(48, pitchBar.getProgress() + 1));
+            applyPitchLiveIfPlaying();
+        });
+        pitchReset.setOnClickListener(v -> {
+            pitchBar.setProgress(24);
+            pitchSemitones = 0f;
+            updatePitchLabel();
+            applyPitchLiveIfPlaying();
+        });
+
         LinearLayout cutterCard = card();
         LinearLayout.LayoutParams cutterParams = cardParams();
         cutterParams.topMargin = dp(14);
@@ -234,7 +297,7 @@ public class MainActivity extends Activity {
         TextView exportTitle = text("Export Semua", 18, TEXT, true);
         exportCard.addView(exportTitle);
 
-        TextView exportDesc = text("MP4/M4A AAC → M4A lossless. MP3 → MP3. Semua part disimpan sekaligus ke folder pilihan.", 13, MUTED, false);
+        TextView exportDesc = text("Pitch 0: export lossless seperti sumber. Pitch selain 0: export WAV 16-bit dengan pitch yang sudah diterapkan.", 13, MUTED, false);
         exportDesc.setPadding(0, dp(4), 0, dp(10));
         exportCard.addView(exportDesc);
 
@@ -326,7 +389,8 @@ public class MainActivity extends Activity {
                 seekBar.setProgress(0);
                 timeText.setText("00:00.000 / " + formatTime(durationMs));
                 refreshCuts();
-                setStatus("Audio siap. Putar, lalu tekan Tambah Cut setiap akhir voice line.", false);
+                updatePitchLabel();
+                setStatus("Audio siap. Putar, atur pitch bila perlu, lalu tambahkan titik cut.", false);
             });
             player.setOnCompletionListener(mp -> playButton.setText("PLAY"));
             player.prepareAsync();
@@ -357,6 +421,7 @@ public class MainActivity extends Activity {
             if (player.isPlaying()) {
                 player.pause();
             } else {
+                applyPitchForPlayback();
                 player.start();
             }
         } catch (Exception e) {
@@ -464,7 +529,7 @@ public class MainActivity extends Activity {
             row.addView(preview, new LinearLayout.LayoutParams(dp(78), dp(48)));
             preview.setOnClickListener(v -> {
                 seekTo(b[partIndex]);
-                try { player.start(); } catch (Exception ignored) {}
+                try { applyPitchForPlayback(); player.start(); } catch (Exception ignored) {}
             });
         }
 
@@ -488,16 +553,35 @@ public class MainActivity extends Activity {
 
         executor.execute(() -> {
             try {
-                AudioSegmentExporter.exportAll(
-                        this,
-                        sourceUri,
-                        treeUri,
-                        boundaries,
-                        prefix,
-                        (current, total, fileName) -> runOnUiThread(() ->
-                                setStatus("Export " + current + "/" + total + " • " + fileName, false)
-                        )
-                );
+                if (Math.abs(pitchSemitones) < 0.001f) {
+                    AudioSegmentExporter.exportAll(
+                            this,
+                            sourceUri,
+                            treeUri,
+                            boundaries,
+                            prefix,
+                            (current, total, fileName) -> runOnUiThread(() ->
+                                    setStatus("Export " + current + "/" + total + " • " + fileName, false)
+                            )
+                    );
+                } else {
+                    final float exportPitch = pitchSemitones;
+                    PitchedWavExporter.exportAll(
+                            this,
+                            sourceUri,
+                            treeUri,
+                            boundaries,
+                            prefix,
+                            exportPitch,
+                            (current, total, fileName) -> runOnUiThread(() ->
+                                    setStatus(
+                                            "Export " + current + "/" + total + " • " + fileName
+                                                    + " • Pitch " + formatPitch(exportPitch),
+                                            false
+                                    )
+                            )
+                    );
+                }
                 runOnUiThread(() -> {
                     exportButton.setEnabled(true);
                     setStatus("Selesai! " + (boundaries.length - 1) + " file berhasil disimpan.", false);
@@ -533,6 +617,38 @@ public class MainActivity extends Activity {
         String s = value == null ? "" : value.trim().replaceAll("[^a-zA-Z0-9_-]+", "_");
         if (s.isEmpty()) s = "commentator";
         return s;
+    }
+
+    private void updatePitchLabel() {
+        if (pitchValueText == null) return;
+        pitchValueText.setText(formatPitch(pitchSemitones));
+        pitchValueText.setTextColor(Math.abs(pitchSemitones) < 0.001f ? MUTED : ORANGE);
+    }
+
+    private String formatPitch(float semitones) {
+        return String.format(Locale.US, "%+.1f st", semitones);
+    }
+
+    private float getPitchRatio() {
+        return (float) Math.pow(2.0, pitchSemitones / 12.0);
+    }
+
+    private void applyPitchLiveIfPlaying() {
+        if (player == null) return;
+        try {
+            if (player.isPlaying()) {
+                applyPitchForPlayback();
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private void applyPitchForPlayback() {
+        if (player == null) return;
+        PlaybackParams params = new PlaybackParams();
+        params.setSpeed(1.0f);
+        params.setPitch(getPitchRatio());
+        params.setAudioFallbackMode(PlaybackParams.AUDIO_FALLBACK_MODE_DEFAULT);
+        player.setPlaybackParams(params);
     }
 
     private String formatTime(long ms) {
