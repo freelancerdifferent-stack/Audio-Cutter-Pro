@@ -131,7 +131,7 @@ public class MainActivity extends Activity {
         waveParams.topMargin = dp(14);
         sourceCard.addView(waveformView, waveParams);
 
-        TextView waveHint = text("Tap waveform untuk seek. Drag garis kuning untuk menggeser titik cut.", 12, MUTED, false);
+        TextView waveHint = text("Cubit 2 jari untuk zoom in/out. Geser waveform kiri/kanan saat zoom. Tap untuk seek, drag garis kuning untuk menggeser cut.", 12, MUTED, false);
         waveHint.setPadding(0, dp(8), 0, 0);
         sourceCard.addView(waveHint);
 
