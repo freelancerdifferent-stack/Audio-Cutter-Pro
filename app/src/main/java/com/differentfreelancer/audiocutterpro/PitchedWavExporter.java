@@ -4,25 +4,36 @@ import android.content.ContentResolver;
 import android.content.Context;
 import android.media.AudioFormat;
 import android.media.MediaCodec;
+import android.media.MediaCodecInfo;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
+import android.media.MediaMuxer;
 import android.net.Uri;
+import android.os.ParcelFileDescriptor;
 import android.provider.DocumentsContract;
 
-import java.io.ByteArrayOutputStream;
+import com.github.axet.lamejni.Lame;
+
+import java.io.FileOutputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.nio.ShortBuffer;
+import java.nio.channels.FileChannel;
 import java.util.Arrays;
 import java.util.Locale;
 
 public final class PitchedWavExporter {
+    public static final int FORMAT_MP3 = 0;
+    public static final int FORMAT_M4A = 1;
+    public static final int FORMAT_WAV = 2;
 
     public interface ProgressListener {
         void onProgress(int current, int total, String fileName);
     }
+
+    private static volatile boolean lameLoaded = false;
 
     private PitchedWavExporter() {}
 
@@ -33,6 +44,7 @@ public final class PitchedWavExporter {
             long[] boundariesMs,
             String prefix,
             float semitones,
+            int format,
             ProgressListener listener
     ) throws Exception {
         if (boundariesMs == null || boundariesMs.length < 2) {
@@ -40,8 +52,10 @@ public final class PitchedWavExporter {
         }
 
         int total = boundariesMs.length - 1;
+        String extension = extensionForFormat(format);
+
         for (int i = 0; i < total; i++) {
-            String fileName = prefix + "_" + String.format(Locale.US, "%02d", i + 1) + ".wav";
+            String fileName = prefix + "_" + String.format(Locale.US, "%02d", i + 1) + extension;
             if (listener != null) listener.onProgress(i + 1, total, fileName);
 
             long startUs = boundariesMs[i] * 1000L;
@@ -53,15 +67,42 @@ public final class PitchedWavExporter {
                     pcm.channels,
                     semitones
             );
-            writeWav(
-                    context.getContentResolver(),
-                    treeUri,
-                    fileName,
-                    processed,
-                    pcm.sampleRate,
-                    pcm.channels
-            );
+
+            if (format == FORMAT_MP3) {
+                writeMp3(
+                        context.getContentResolver(),
+                        treeUri,
+                        fileName,
+                        processed,
+                        pcm.sampleRate,
+                        pcm.channels
+                );
+            } else if (format == FORMAT_M4A) {
+                writeM4a(
+                        context.getContentResolver(),
+                        treeUri,
+                        fileName,
+                        processed,
+                        pcm.sampleRate,
+                        pcm.channels
+                );
+            } else {
+                writeWav(
+                        context.getContentResolver(),
+                        treeUri,
+                        fileName,
+                        processed,
+                        pcm.sampleRate,
+                        pcm.channels
+                );
+            }
         }
+    }
+
+    private static String extensionForFormat(int format) {
+        if (format == FORMAT_MP3) return ".mp3";
+        if (format == FORMAT_M4A) return ".m4a";
+        return ".wav";
     }
 
     private static DecodedPcm decodeSegment(
@@ -272,6 +313,217 @@ public final class PitchedWavExporter {
             ShortBuffer shorts = slice.asShortBuffer();
             while (shorts.hasRemaining()) {
                 collector.add(shorts.get());
+            }
+        }
+    }
+
+    private static void ensureLameLoaded() {
+        if (lameLoaded) return;
+        synchronized (PitchedWavExporter.class) {
+            if (lameLoaded) return;
+            System.loadLibrary("lame");
+            System.loadLibrary("lamejni");
+            lameLoaded = true;
+        }
+    }
+
+    private static void writeMp3(
+            ContentResolver resolver,
+            Uri treeUri,
+            String fileName,
+            short[] samples,
+            int sampleRate,
+            int channels
+    ) throws Exception {
+        Uri outputUri = null;
+        ParcelFileDescriptor pfd = null;
+        FileOutputStream fos = null;
+        Lame lame = null;
+
+        try {
+            ensureLameLoaded();
+            outputUri = createDocument(resolver, treeUri, "audio/mpeg", fileName);
+            pfd = resolver.openFileDescriptor(outputUri, "rw");
+            if (pfd == null) throw new IllegalStateException("Tidak bisa membuka file MP3.");
+
+            fos = new FileOutputStream(pfd.getFileDescriptor());
+            FileChannel channel = fos.getChannel();
+
+            lame = new Lame();
+            lame.open(Math.max(1, Math.min(2, channels)), sampleRate, 320, 2);
+
+            int chunk = Math.max(1152 * Math.max(1, channels) * 8, 8192);
+            for (int pos = 0; pos < samples.length; pos += chunk) {
+                int len = Math.min(chunk, samples.length - pos);
+                byte[] encoded = lame.encode(samples, pos, len);
+                if (encoded != null && encoded.length > 0) {
+                    channel.write(ByteBuffer.wrap(encoded));
+                }
+            }
+
+            byte[] flush = lame.encode(null, 0, 0);
+            if (flush != null && flush.length > 0) {
+                channel.write(ByteBuffer.wrap(flush));
+            }
+
+            byte[] header = lame.close();
+            lame = null;
+            if (header != null && header.length > 0) {
+                channel.position(0);
+                channel.write(ByteBuffer.wrap(header));
+            }
+
+            channel.force(true);
+        } catch (Exception | UnsatisfiedLinkError e) {
+            if (outputUri != null) {
+                try { resolver.delete(outputUri, null, null); } catch (Exception ignored) {}
+            }
+            throw new IllegalStateException("Encoder MP3 gagal: " + e.getMessage(), e);
+        } finally {
+            if (lame != null) {
+                try { lame.close(); } catch (Exception ignored) {}
+            }
+            if (fos != null) {
+                try { fos.close(); } catch (Exception ignored) {}
+            }
+            if (pfd != null) {
+                try { pfd.close(); } catch (Exception ignored) {}
+            }
+        }
+    }
+
+    private static void writeM4a(
+            ContentResolver resolver,
+            Uri treeUri,
+            String fileName,
+            short[] samples,
+            int sampleRate,
+            int channels
+    ) throws Exception {
+        Uri outputUri = null;
+        ParcelFileDescriptor pfd = null;
+        MediaCodec encoder = null;
+        MediaMuxer muxer = null;
+        boolean muxerStarted = false;
+
+        try {
+            outputUri = createDocument(resolver, treeUri, "audio/mp4", fileName);
+            pfd = resolver.openFileDescriptor(outputUri, "rw");
+            if (pfd == null) throw new IllegalStateException("Tidak bisa membuka file M4A.");
+
+            int safeChannels = Math.max(1, Math.min(2, channels));
+            MediaFormat format = MediaFormat.createAudioFormat(
+                    MediaFormat.MIMETYPE_AUDIO_AAC,
+                    sampleRate,
+                    safeChannels
+            );
+            format.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC);
+            format.setInteger(MediaFormat.KEY_BIT_RATE, safeChannels == 1 ? 160_000 : 256_000);
+            format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 128 * 1024);
+
+            encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC);
+            encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+            encoder.start();
+
+            muxer = new MediaMuxer(
+                    pfd.getFileDescriptor(),
+                    MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4
+            );
+
+            MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+            int inputSamplePos = 0;
+            boolean inputDone = false;
+            boolean outputDone = false;
+            int muxTrack = -1;
+
+            while (!outputDone) {
+                if (!inputDone) {
+                    int inputIndex = encoder.dequeueInputBuffer(10_000);
+                    if (inputIndex >= 0) {
+                        ByteBuffer input = encoder.getInputBuffer(inputIndex);
+                        if (input != null) {
+                            input.clear();
+                            int maxShorts = input.remaining() / 2;
+                            int remaining = samples.length - inputSamplePos;
+                            int toWrite = Math.min(maxShorts, remaining);
+
+                            if (toWrite <= 0) {
+                                long frames = inputSamplePos / Math.max(1, safeChannels);
+                                long ptsUs = frames * 1_000_000L / sampleRate;
+                                encoder.queueInputBuffer(
+                                        inputIndex,
+                                        0,
+                                        0,
+                                        ptsUs,
+                                        MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                                );
+                                inputDone = true;
+                            } else {
+                                input.order(ByteOrder.LITTLE_ENDIAN);
+                                ShortBuffer shorts = input.asShortBuffer();
+                                shorts.put(samples, inputSamplePos, toWrite);
+
+                                int bytes = toWrite * 2;
+                                long frames = inputSamplePos / Math.max(1, safeChannels);
+                                long ptsUs = frames * 1_000_000L / sampleRate;
+
+                                encoder.queueInputBuffer(
+                                        inputIndex,
+                                        0,
+                                        bytes,
+                                        ptsUs,
+                                        0
+                                );
+                                inputSamplePos += toWrite;
+                            }
+                        }
+                    }
+                }
+
+                int outputIndex = encoder.dequeueOutputBuffer(info, 10_000);
+
+                if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    if (muxerStarted) {
+                        throw new IllegalStateException("Format AAC berubah lebih dari sekali.");
+                    }
+                    muxTrack = muxer.addTrack(encoder.getOutputFormat());
+                    muxer.start();
+                    muxerStarted = true;
+                    continue;
+                }
+
+                if (outputIndex >= 0) {
+                    ByteBuffer out = encoder.getOutputBuffer(outputIndex);
+                    if (out != null && info.size > 0 && muxerStarted) {
+                        if ((info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {
+                            out.position(info.offset);
+                            out.limit(info.offset + info.size);
+                            muxer.writeSampleData(muxTrack, out, info);
+                        }
+                    }
+
+                    outputDone = (info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
+                    encoder.releaseOutputBuffer(outputIndex, false);
+                }
+            }
+        } catch (Exception e) {
+            if (outputUri != null) {
+                try { resolver.delete(outputUri, null, null); } catch (Exception ignored) {}
+            }
+            throw e;
+        } finally {
+            if (encoder != null) {
+                try { encoder.stop(); } catch (Exception ignored) {}
+                try { encoder.release(); } catch (Exception ignored) {}
+            }
+            if (muxer != null) {
+                try {
+                    if (muxerStarted) muxer.stop();
+                } catch (Exception ignored) {}
+                try { muxer.release(); } catch (Exception ignored) {}
+            }
+            if (pfd != null) {
+                try { pfd.close(); } catch (Exception ignored) {}
             }
         }
     }
