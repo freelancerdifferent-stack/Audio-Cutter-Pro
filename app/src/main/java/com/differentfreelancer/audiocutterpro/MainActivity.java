@@ -64,6 +64,10 @@ public class MainActivity extends Activity {
     private EditText targetInput;
     private EditText prefixInput;
     private LinearLayout segmentsContainer;
+    private Button formatMp3Button;
+    private Button formatM4aButton;
+    private Button formatWavButton;
+    private int exportFormat = PitchedWavExporter.FORMAT_MP3;
     private SeekBar pitchBar;
     private TextView pitchValueText;
     private float pitchSemitones = 0f;
@@ -297,9 +301,30 @@ public class MainActivity extends Activity {
         TextView exportTitle = text("Export Semua", 18, TEXT, true);
         exportCard.addView(exportTitle);
 
-        TextView exportDesc = text("Pitch 0: export lossless seperti sumber. Pitch selain 0: export WAV 16-bit dengan pitch yang sudah diterapkan.", 13, MUTED, false);
-        exportDesc.setPadding(0, dp(4), 0, dp(10));
+        TextView formatLabel = text("Format Export", 12, MUTED, false);
+        formatLabel.setPadding(0, dp(8), 0, dp(5));
+        exportCard.addView(formatLabel);
+
+        LinearLayout formatRow = horizontal();
+        exportCard.addView(formatRow, matchWrap());
+
+        formatMp3Button = secondaryButton("MP3 320");
+        formatM4aButton = secondaryButton("M4A");
+        formatWavButton = secondaryButton("WAV");
+
+        formatRow.addView(formatMp3Button, weightedButton());
+        formatRow.addView(formatM4aButton, weightedButton());
+        formatRow.addView(formatWavButton, weightedButton());
+
+        formatMp3Button.setOnClickListener(v -> setExportFormat(PitchedWavExporter.FORMAT_MP3));
+        formatM4aButton.setOnClickListener(v -> setExportFormat(PitchedWavExporter.FORMAT_M4A));
+        formatWavButton.setOnClickListener(v -> setExportFormat(PitchedWavExporter.FORMAT_WAV));
+
+        TextView exportDesc = text("Default MP3 320 kbps. M4A pitch 0 memakai audio AAC asli bila memungkinkan; jika pitch berubah akan di-encode ulang. WAV = PCM 16-bit.", 13, MUTED, false);
+        exportDesc.setPadding(0, dp(8), 0, dp(10));
         exportCard.addView(exportDesc);
+
+        updateExportFormatButtons();
 
         exportButton = primaryButton("EXPORT SEMUA PART");
         exportButton.setEnabled(false);
@@ -553,7 +578,20 @@ public class MainActivity extends Activity {
 
         executor.execute(() -> {
             try {
-                if (Math.abs(pitchSemitones) < 0.001f) {
+                final float exportPitch = pitchSemitones;
+                final int selectedFormat = exportFormat;
+
+                boolean canUseOriginalM4a = false;
+                if (selectedFormat == PitchedWavExporter.FORMAT_M4A
+                        && Math.abs(exportPitch) < 0.001f) {
+                    try {
+                        canUseOriginalM4a = ".m4a".equals(
+                                AudioSegmentExporter.detectExtension(this, sourceUri)
+                        );
+                    } catch (Exception ignored) {}
+                }
+
+                if (canUseOriginalM4a) {
                     AudioSegmentExporter.exportAll(
                             this,
                             sourceUri,
@@ -561,11 +599,14 @@ public class MainActivity extends Activity {
                             boundaries,
                             prefix,
                             (current, total, fileName) -> runOnUiThread(() ->
-                                    setStatus("Export " + current + "/" + total + " • " + fileName, false)
+                                    setStatus(
+                                            "Export " + current + "/" + total + " • " + fileName
+                                                    + " • M4A Original",
+                                            false
+                                    )
                             )
                     );
                 } else {
-                    final float exportPitch = pitchSemitones;
                     PitchedWavExporter.exportAll(
                             this,
                             sourceUri,
@@ -573,9 +614,11 @@ public class MainActivity extends Activity {
                             boundaries,
                             prefix,
                             exportPitch,
+                            selectedFormat,
                             (current, total, fileName) -> runOnUiThread(() ->
                                     setStatus(
                                             "Export " + current + "/" + total + " • " + fileName
+                                                    + " • " + exportFormatName(selectedFormat)
                                                     + " • Pitch " + formatPitch(exportPitch),
                                             false
                                     )
@@ -617,6 +660,35 @@ public class MainActivity extends Activity {
         String s = value == null ? "" : value.trim().replaceAll("[^a-zA-Z0-9_-]+", "_");
         if (s.isEmpty()) s = "commentator";
         return s;
+    }
+
+    private void setExportFormat(int format) {
+        exportFormat = format;
+        updateExportFormatButtons();
+        setStatus("Format export: " + exportFormatName(format), false);
+    }
+
+    private String exportFormatName(int format) {
+        if (format == PitchedWavExporter.FORMAT_MP3) return "MP3 320 kbps";
+        if (format == PitchedWavExporter.FORMAT_M4A) return "M4A";
+        return "WAV";
+    }
+
+    private void updateExportFormatButtons() {
+        if (formatMp3Button == null || formatM4aButton == null || formatWavButton == null) return;
+
+        styleFormatButton(formatMp3Button, exportFormat == PitchedWavExporter.FORMAT_MP3);
+        styleFormatButton(formatM4aButton, exportFormat == PitchedWavExporter.FORMAT_M4A);
+        styleFormatButton(formatWavButton, exportFormat == PitchedWavExporter.FORMAT_WAV);
+    }
+
+    private void styleFormatButton(Button button, boolean selected) {
+        button.setTextColor(TEXT);
+        if (selected) {
+            button.setBackground(panelDrawable(ACCENT, ACCENT, dp(12)));
+        } else {
+            button.setBackground(panelDrawable(CARD_2, BORDER, dp(12)));
+        }
     }
 
     private void updatePitchLabel() {
