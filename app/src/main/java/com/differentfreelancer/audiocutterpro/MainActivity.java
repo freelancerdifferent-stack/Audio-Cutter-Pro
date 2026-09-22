@@ -189,6 +189,47 @@ public class MainActivity extends Activity {
             }
         });
 
+        LinearLayout cutterCard = card();
+        LinearLayout.LayoutParams cutterParams = cardParams();
+        cutterParams.topMargin = dp(14);
+        root.addView(cutterCard, cutterParams);
+
+        LinearLayout headerRow = horizontal();
+        cutterCard.addView(headerRow, matchWrap());
+        TextView cutTitle = text("Titik Cut", 18, TEXT, true);
+        cutCountText = text("0 / 28 cut", 14, ORANGE, true);
+        cutCountText.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        headerRow.addView(cutTitle, new LinearLayout.LayoutParams(0, dp(44), 1f));
+        headerRow.addView(cutCountText, new LinearLayout.LayoutParams(0, dp(44), 1f));
+
+        LinearLayout targetRow = horizontal();
+        targetRow.setPadding(0, dp(6), 0, dp(10));
+        cutterCard.addView(targetRow, matchWrap());
+
+        targetInput = input("29");
+        targetInput.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        prefixInput = input("commentator");
+        targetRow.addView(labeledInput("Target part", targetInput), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        LinearLayout.LayoutParams prefixParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.5f);
+        prefixParams.leftMargin = dp(8);
+        targetRow.addView(labeledInput("Nama file", prefixInput), prefixParams);
+
+        addCutButton = primaryButton("+ TAMBAH CUT DI PLAYHEAD");
+        addCutButton.setEnabled(false);
+        cutterCard.addView(addCutButton, matchWrap());
+
+        LinearLayout editRow = horizontal();
+        editRow.setPadding(0, dp(8), 0, 0);
+        cutterCard.addView(editRow, matchWrap());
+        undoButton = secondaryButton("UNDO");
+        resetButton = secondaryButton("RESET");
+        editRow.addView(undoButton, weightedButton());
+        editRow.addView(resetButton, weightedButton());
+
+        addCutButton.setOnClickListener(v -> addCutAtPlayhead());
+        undoButton.setOnClickListener(v -> undoCut());
+        resetButton.setOnClickListener(v -> resetCuts());
+
         LinearLayout pitchCard = card();
         LinearLayout.LayoutParams pitchCardParams = cardParams();
         pitchCardParams.topMargin = dp(14);
@@ -247,47 +288,6 @@ public class MainActivity extends Activity {
             updatePitchLabel();
             applyPitchLiveIfPlaying();
         });
-
-        LinearLayout cutterCard = card();
-        LinearLayout.LayoutParams cutterParams = cardParams();
-        cutterParams.topMargin = dp(14);
-        root.addView(cutterCard, cutterParams);
-
-        LinearLayout headerRow = horizontal();
-        cutterCard.addView(headerRow, matchWrap());
-        TextView cutTitle = text("Titik Cut", 18, TEXT, true);
-        cutCountText = text("0 / 28 cut", 14, ORANGE, true);
-        cutCountText.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
-        headerRow.addView(cutTitle, new LinearLayout.LayoutParams(0, dp(44), 1f));
-        headerRow.addView(cutCountText, new LinearLayout.LayoutParams(0, dp(44), 1f));
-
-        LinearLayout targetRow = horizontal();
-        targetRow.setPadding(0, dp(6), 0, dp(10));
-        cutterCard.addView(targetRow, matchWrap());
-
-        targetInput = input("29");
-        targetInput.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
-        prefixInput = input("commentator");
-        targetRow.addView(labeledInput("Target part", targetInput), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        LinearLayout.LayoutParams prefixParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.5f);
-        prefixParams.leftMargin = dp(8);
-        targetRow.addView(labeledInput("Nama file", prefixInput), prefixParams);
-
-        addCutButton = primaryButton("+ TAMBAH CUT DI PLAYHEAD");
-        addCutButton.setEnabled(false);
-        cutterCard.addView(addCutButton, matchWrap());
-
-        LinearLayout editRow = horizontal();
-        editRow.setPadding(0, dp(8), 0, 0);
-        cutterCard.addView(editRow, matchWrap());
-        undoButton = secondaryButton("UNDO");
-        resetButton = secondaryButton("RESET");
-        editRow.addView(undoButton, weightedButton());
-        editRow.addView(resetButton, weightedButton());
-
-        addCutButton.setOnClickListener(v -> addCutAtPlayhead());
-        undoButton.setOnClickListener(v -> undoCut());
-        resetButton.setOnClickListener(v -> resetCuts());
 
         LinearLayout exportCard = card();
         LinearLayout.LayoutParams exportParams = cardParams();
